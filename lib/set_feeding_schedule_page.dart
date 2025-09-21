@@ -9,7 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 // Enhanced Network Helper for ESP8266 communication
 class NetworkHelper {
   // IMPORTANT: UPDATE THIS IP ADDRESS TO YOUR ESP8266'S ACTUAL IP
-  static const String _esp8266IpAddress = '192.168.100.11';
+  static const String _esp8266IpAddress = '192.168.100.42';
   static const Duration _timeout = Duration(seconds: 10);
 
   // Test ESP8266 connectivity

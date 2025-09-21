@@ -6,7 +6,7 @@ import 'dart:convert';
 
 // Network Helper for ESP8266 communication (reused from set_feeding_schedule_page.dart)
 class NetworkHelper {
-  static const String _esp8266IpAddress = '192.168.100.11'; // UPDATE THIS IP!
+  static const String _esp8266IpAddress = '192.168.100.42'; // UPDATE THIS IP!
   static const Duration _timeout = Duration(seconds: 10);
 
   // Test ESP8266 connectivity
