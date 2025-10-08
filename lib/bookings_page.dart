@@ -152,6 +152,7 @@ class _BookingPageState extends State<BookingPage> {
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
+                                  // FIX: Wrap the Text widget in Expanded to prevent overflow
                                   Expanded(
                                     child: Text(
                                       'Booking ID: $bookingId',
@@ -161,7 +162,10 @@ class _BookingPageState extends State<BookingPage> {
                                         color: Colors.orange[800],
                                         letterSpacing: 0.5,
                                       ),
-                                      overflow: TextOverflow.ellipsis,
+                                      overflow:
+                                          TextOverflow
+                                              .ellipsis, // Ensure overflow is handled
+                                      maxLines: 1, // Restrict to one line
                                     ),
                                   ),
                                   const SizedBox(width: 8),

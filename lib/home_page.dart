@@ -56,7 +56,7 @@ class NetworkHelper {
           print('✅ Feeding triggered successfully!');
           return true;
         } else {
-          print('❌ HTTP ${response.statusCode}: ${response.body}');
+          print('❌ HTTP  ${response.statusCode}: ${response.body}');
         }
       } catch (e) {
         print('❌ Attempt $attempt failed: $e');

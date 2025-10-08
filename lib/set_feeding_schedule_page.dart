@@ -9,14 +9,24 @@ import 'package:firebase_auth/firebase_auth.dart';
 // Enhanced Network Helper for ESP8266 communication
 class NetworkHelper {
   // IMPORTANT: UPDATE THIS IP ADDRESS TO YOUR ESP8266'S ACTUAL IP
-  static const String _esp8266IpAddress = '192.168.100.42';
+  // This is a fallback/default and should be overridden by the state variable
+  static const String _defaultEsp8266IpAddress = '192.168.100.42';
   static const Duration _timeout = Duration(seconds: 10);
+
+  // Allow the IP address to be passed dynamically
+  static String _ipAddress = _defaultEsp8266IpAddress;
+
+  static void setIpAddress(String ip) {
+    _ipAddress = ip;
+  }
+
+  static String get ipAddress => _ipAddress;
 
   // Test ESP8266 connectivity
   static Future<bool> testConnection() async {
     try {
       final response = await http
-          .get(Uri.parse('http://$_esp8266IpAddress/ping'))
+          .get(Uri.parse('http://$_ipAddress/ping'))
           .timeout(_timeout);
 
       return response.statusCode == 200 && response.body.trim() == 'pong';
@@ -30,7 +40,7 @@ class NetworkHelper {
   static Future<Map<String, dynamic>?> getStatus() async {
     try {
       final response = await http
-          .get(Uri.parse('http://$_esp8266IpAddress/status'))
+          .get(Uri.parse('http://$_ipAddress/status'))
           .timeout(_timeout);
 
       if (response.statusCode == 200) {
@@ -50,7 +60,7 @@ class NetworkHelper {
 
         final response = await http
             .post(
-              Uri.parse('http://$_esp8266IpAddress/trigger_feeding'),
+              Uri.parse('http://$_ipAddress/trigger_feeding'),
               headers: {'Content-Type': 'application/json'},
             )
             .timeout(_timeout);
@@ -71,38 +81,7 @@ class NetworkHelper {
     return false;
   }
 
-  // Enhanced servo test with retry mechanism
-  static Future<bool> testServo() async {
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        print('Servo test attempt $attempt/3...');
-
-        final response = await http
-            .post(
-              Uri.parse('http://$_esp8266IpAddress/test_servo'),
-              headers: {'Content-Type': 'application/json'},
-              body: json.encode({'command': 'TEST_SERVO'}),
-            )
-            .timeout(_timeout);
-
-        if (response.statusCode == 200) {
-          print('✅ Servo test completed successfully!');
-          return true;
-        } else {
-          print('❌ HTTP ${response.statusCode}: ${response.body}');
-        }
-      } catch (e) {
-        print('❌ Attempt $attempt failed: $e');
-        if (attempt < 3) {
-          await Future.delayed(const Duration(seconds: 2));
-        }
-      }
-    }
-    return false;
-  }
-
   // Send schedule to ESP8266 with retry mechanism
-  // The scheduleData should now directly contain 'petName' and 'feedingTimes'
   static Future<bool> sendSchedule(Map<String, dynamic> scheduleData) async {
     for (int attempt = 1; attempt <= 3; attempt++) {
       try {
@@ -113,7 +92,7 @@ class NetworkHelper {
 
         final response = await http
             .post(
-              Uri.parse('http://$_esp8266IpAddress/set_schedule'),
+              Uri.parse('http://$_ipAddress/set_schedule'),
               headers: {'Content-Type': 'application/json'},
               body: json.encode(scheduleData),
             )
@@ -136,8 +115,6 @@ class NetworkHelper {
     }
     return false;
   }
-
-  static String get ipAddress => _esp8266IpAddress;
 }
 
 class SetFeedingSchedulePage extends StatefulWidget {
@@ -155,6 +132,13 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
   Map<String, dynamic>? _bookingDetails;
   bool _isLoading = true;
   String _errorMessage = '';
+
+  // NEW/MODIFIED CONTROLLERS/STATE
+  // Replaced TextEditingController with String? for the dropdown value
+  String? _selectedCageNumber;
+  final TextEditingController _ipAddressController = TextEditingController(
+    text: NetworkHelper._defaultEsp8266IpAddress,
+  ); // Pre-fill with default IP
 
   // Controllers for facilitator-set feeding schedule inputs
   final List<Map<String, TextEditingController>> _feedingTimeControllers = [];
@@ -183,6 +167,9 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
 
   @override
   void dispose() {
+    // _cageNumberController.dispose(); // Removed disposal for old controller
+    _ipAddressController.dispose(); // Dispose new controller
+
     for (var controllers in _feedingTimeControllers) {
       controllers['time']?.dispose();
       controllers['grams']?.dispose();
@@ -207,8 +194,22 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
           await _firestore.collection('bookings').doc(widget.bookingId).get();
 
       if (bookingSnapshot.exists) {
+        final data = bookingSnapshot.data() as Map<String, dynamic>;
+
+        // Load Cage Number and IP Address if they exist in the booking
+        // Load existing cage number and ensure it's a String
+        final String? existingCage = data['cageNumber']?.toString();
+        final String existingIp =
+            data['deviceIpAddress'] ??
+            NetworkHelper._defaultEsp8266IpAddress; // Use default as fallback
+
         setState(() {
-          _bookingDetails = bookingSnapshot.data() as Map<String, dynamic>;
+          _bookingDetails = data;
+          // Assign loaded cage number to the dropdown state variable
+          _selectedCageNumber =
+              existingCage?.isNotEmpty == true ? existingCage : null;
+          _ipAddressController.text = existingIp;
+          NetworkHelper.setIpAddress(existingIp); // Set the IP in the helper
           _isLoading = false;
         });
 
@@ -312,14 +313,20 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
 
   void _removeFeedingTimeField(int index) {
     setState(() {
-      _feedingTimeControllers[index]['time']?.dispose();
-      _feedingTimeControllers[index]['grams']?.dispose();
+      // FIX: Get the correct map element before disposing
+      final controllers = _feedingTimeControllers[index];
+      controllers['time']?.dispose();
+      controllers['grams']?.dispose();
+      // Remove the element after disposing controllers
       _feedingTimeControllers.removeAt(index);
     });
   }
 
   // Test ESP8266 connection
   void _testESP8266Connection() async {
+    // 1. Update NetworkHelper IP address
+    NetworkHelper.setIpAddress(_ipAddressController.text.trim());
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -328,10 +335,12 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
             title: const Text('Testing ESP8266 Connection'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
-              children: const [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Checking device connectivity...'),
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(
+                  'Checking device connectivity at ${NetworkHelper.ipAddress}...',
+                ),
               ],
             ),
           ),
@@ -384,6 +393,9 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
 
   // Manual feeding with improved error handling
   void _triggerFeeding() async {
+    // 1. Update NetworkHelper IP address before triggering
+    NetworkHelper.setIpAddress(_ipAddressController.text.trim());
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -450,6 +462,30 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
   }
 
   Future<void> _saveFeedingSchedule() async {
+    // Use the selected cage number from the state variable
+    final String? cageNumber = _selectedCageNumber;
+    final String ipAddress = _ipAddressController.text.trim();
+
+    if (cageNumber == null || cageNumber.isEmpty) {
+      // Check for null or empty string
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a Cage Number.')),
+      );
+      return;
+    }
+
+    if (ipAddress.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter the ESP8266 IP Address.')),
+      );
+      return;
+    }
+
+    // Update the NetworkHelper with the latest IP
+    NetworkHelper.setIpAddress(ipAddress);
+
     // Show loading dialog
     showDialog(
       context: context,
@@ -508,14 +544,14 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
           return;
         }
 
-        final double parsedGrams = double.tryParse(grams) ?? 0;
+        final double? parsedGrams = double.tryParse(grams);
 
-        if (parsedGrams == null) {
+        if (parsedGrams == null || parsedGrams == 0) {
           if (!mounted) return;
           Navigator.pop(context); // Close loading dialog
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Please enter a valid number for grams.'),
+              content: Text('Please enter a valid, non-zero number for grams.'),
             ),
           );
           return;
@@ -533,8 +569,10 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
       final String scheduledBy =
           _currentFacilitatorUid ?? 'Unknown Facilitator';
 
-      // Save to Firestore first
+      // --- 1. Save to Firestore (Booking) ---
       await _firestore.collection('bookings').doc(widget.bookingId).update({
+        'cageNumber': cageNumber, // Save new field from state variable
+        'deviceIpAddress': ipAddress, // Save new field
         'feedingSchedule': {
           'specificTimes': specificFeedingTimes,
           'scheduledBy': scheduledBy,
@@ -544,16 +582,21 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
         'updateAt': FieldValue.serverTimestamp(),
       });
 
+      // --- 2. Save to Firestore (Feeding History) ---
       await _firestore.collection('feedingHistory').add({
         'bookingId': widget.bookingId,
         'petId': petInfo?['petId'] ?? 'N/A',
         'petName': petInfo?['petName'] ?? 'N/A',
+        'foodBrand':
+            _bookingDetails!['feedingDetails']?['foodBrand'] ??
+            'N/A', // Added foodBrand to history
         'specificTimes': specificFeedingTimes,
         'scheduledAt': FieldValue.serverTimestamp(),
         'scheduledBy': scheduledBy,
+        'cageNumber': cageNumber, // Also save to history
       });
 
-      // Prepare ESP8266 data - ONLY include petName and feedingTimes as expected by ESP8266
+      // --- 3. Send to ESP8266 ---
       final String espPetName = petInfo?['petName'] ?? 'Unknown Pet';
 
       final espData = {
@@ -561,7 +604,6 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
         'feedingTimes': specificFeedingTimes,
       };
 
-      // Send to ESP8266 with enhanced error handling
       bool espSuccess = await NetworkHelper.sendSchedule(espData);
 
       if (!mounted)
@@ -579,17 +621,12 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '⚠️ Schedule saved to database but failed to send to ESP8266. Check device connection.',
+              '⚠️ Schedule saved to database but failed to send to ESP8266. Check device connection and IP address.',
             ),
             backgroundColor: Colors.orange,
           ),
         );
       }
-
-      // No Navigator.pop(context) here as the SnackBar might still be visible
-      // and the user might want to stay on the page after saving.
-      // If you want to navigate back, uncomment the line below:
-      // Navigator.pop(context);
     } catch (e) {
       print('Overall Save Error: $e');
       if (!mounted) return;
@@ -602,7 +639,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     }
   }
 
-  // Helper widget to build information rows with consistent styling
+  // Helper widget to build information rows with consistent styling (Unchanged)
   Widget _buildInfoRow(
     IconData icon,
     String label,
@@ -640,7 +677,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     );
   }
 
-  // Helper method for text fields
+  // Helper method for text fields (Unchanged, but reused for new fields)
   Widget _buildTextField({
     required TextEditingController controller,
     required String labelText,
@@ -651,6 +688,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     bool readOnly = false,
     VoidCallback? onTap,
     String? suffixText,
+    Color? fillColor, // Added fillColor option
   }) {
     return TextFormField(
       controller: controller,
@@ -665,13 +703,15 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
         suffixText: suffixText,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         filled: true,
-        fillColor: Colors.deepPurple.shade50,
+        fillColor:
+            fillColor ??
+            Colors.deepPurple.shade50, // Use provided color or default
       ),
       validator: validator,
     );
   }
 
-  // Helper for Section Titles
+  // Helper for Section Titles (Unchanged)
   Widget _buildSectionTitle(String title, {Color color = Colors.deepPurple}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -686,7 +726,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     );
   }
 
-  // Helper for read-only pet details
+  // Helper for read-only pet details (Unchanged)
   Widget _buildReadOnlyDetail(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -731,7 +771,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     }
   }
 
-  // Build control buttons for ESP8266 interaction
+  // Build control buttons for ESP8266 interaction (Updated to use dynamic IP)
   Widget _buildControlButtons() {
     return Card(
       elevation: 4,
@@ -743,10 +783,6 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildSectionTitle('Device Controls', color: Colors.blue),
-            Text(
-              'ESP8266 IP: ${NetworkHelper.ipAddress}',
-              style: TextStyle(color: Colors.grey[600], fontSize: 12),
-            ),
             const SizedBox(height: 10),
             Row(
               children: [
@@ -770,7 +806,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     );
   }
 
-  // Enhanced Manual Feeding Section
+  // Enhanced Manual Feeding Section (FIX APPLIED HERE)
   Widget _buildManualFeedingSection() {
     final petInfo = _bookingDetails!['petInformation'] as Map<String, dynamic>?;
     final petName = petInfo?['petName'] ?? 'Unknown Pet';
@@ -827,7 +863,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
               ),
               const SizedBox(height: 20),
 
-              // Device Status Indicator
+              // Device Status Indicator (FIX APPLIED HERE)
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -836,19 +872,20 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.circle,
-                      size: 12,
-                      color:
-                          Colors
-                              .green, // This would be dynamic based on connection status
-                    ),
+                    Icon(Icons.circle, size: 12, color: Colors.green),
                     const SizedBox(width: 8),
-                    Text(
-                      'Device Status: Connected',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
+                    // WRAP TEXT IN EXPANDED TO PREVENT OVERFLOW
+                    Expanded(
+                      child: Text(
+                        'Device Status: Connected (IP: ${NetworkHelper.ipAddress})',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          color: Colors.grey[700],
+                        ),
+                        maxLines: 1, // Ensure single line
+                        overflow:
+                            TextOverflow
+                                .ellipsis, // Handle overflow with ellipsis
                       ),
                     ),
                     const Spacer(),
@@ -948,9 +985,61 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     );
   }
 
+  // NEW: Dropdown for Cage Number (1-20)
+  Widget _buildCageNumberDropdown() {
+    // Generate list of strings '1' through '20'
+    final List<String> cageOptions = List.generate(
+      20,
+      (index) => (index + 1).toString(),
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.brown.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Theme.of(context).colorScheme.primary),
+      ),
+      child: DropdownButtonFormField<String>(
+        value: _selectedCageNumber,
+        hint: const Text('Select Cage Number'),
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: 'Cage Number',
+          labelStyle: const TextStyle(color: Colors.black),
+          prefixIcon: Icon(
+            Icons.meeting_room,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          border: InputBorder.none, // Remove default border
+          filled: false,
+        ),
+        items:
+            cageOptions.map((String cage) {
+              return DropdownMenuItem<String>(
+                value: cage,
+                child: Text('Cage $cage'),
+              );
+            }).toList(),
+        onChanged: (String? newValue) {
+          setState(() {
+            _selectedCageNumber = newValue;
+          });
+        },
+        validator: (value) {
+          if (value == null || value.isEmpty) {
+            return 'Please select a cage number';
+          }
+          return null;
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
+      // ... (Loading screen - Unchanged)
       return Scaffold(
         appBar: AppBar(
           title: const Text('Set Feeding Schedule'),
@@ -962,6 +1051,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     }
 
     if (_errorMessage.isNotEmpty) {
+      // ... (Error screen - Unchanged)
       return Scaffold(
         appBar: AppBar(
           title: const Text('Set Feeding Schedule'),
@@ -986,14 +1076,6 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
     final boardingDetails = booking['boardingDetails'] as Map<String, dynamic>?;
     final groomingDetails = booking['groomingDetails'] as Map<String, dynamic>?;
 
-    final timestamp = booking['timestamp'] as Timestamp?;
-    final formattedTimestamp =
-        timestamp != null
-            ? DateFormat(
-              'MMM dd, yyyy HH:mm a',
-            ).format(timestamp.toDate().toLocal())
-            : 'N/A';
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Set Feeding Schedule'),
@@ -1012,7 +1094,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
             if (booking['serviceType'] != 'Grooming')
               _buildManualFeedingSection(),
 
-            // Booking Overview
+            // Booking Overview (Unchanged)
             Container(
               margin: const EdgeInsets.only(bottom: 24),
               decoration: BoxDecoration(
@@ -1091,7 +1173,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
               ),
             ),
 
-            // Pet Details
+            // Pet Details (Unchanged)
             if (petInfo != null)
               Card(
                 elevation: 4,
@@ -1135,7 +1217,7 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
                 ),
               ),
 
-            // Customer's Feeding Details
+            // Customer's Feeding Details (Unchanged)
             if (booking['feedingDetails'] != null &&
                 booking['serviceType'] == 'Boarding')
               Card(
@@ -1209,7 +1291,40 @@ class _SetFeedingSchedulePageState extends State<SetFeedingSchedulePage> {
                 ),
               ),
 
-            // Facilitator Schedule Setting
+            // Cage and IP Address Input Section
+            if (booking['serviceType'] != 'Grooming')
+              Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                margin: const EdgeInsets.only(bottom: 20),
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildSectionTitle(
+                        'Device Assignment',
+                        color: Colors.brown,
+                      ),
+                      // Replaced TextField with Dropdown
+                      _buildCageNumberDropdown(),
+                      const SizedBox(height: 20),
+                      _buildTextField(
+                        controller: _ipAddressController,
+                        labelText: 'ESP8266 IP Address',
+                        icon: Icons.router,
+                        keyboardType:
+                            TextInputType.phone, // For number input ease
+                        fillColor: Colors.brown.shade50,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Facilitator Schedule Setting (Unchanged logic, just repositioned)
             if (booking['serviceType'] != 'Grooming')
               Card(
                 elevation: 4,
